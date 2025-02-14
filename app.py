@@ -66,6 +66,14 @@ Query: The file /data/dates.txt contains a list of dates, one per line. Count th
 Response:
 pip install python-dateutil && python3 -c "from dateutil import parser; print(sum(1 for line in open('./data/dates.txt') if parser.parse(line).weekday() == 2))" > ./data/dates-wednesdays.txt
 """
+@app.post("/test")
+async def test():
+    cmd = 'pip install python-dateutil && python3 -c \'from dateutil import parser; print(sum(1 for line in open("./data/dates.txt") if parser.parse(line).weekday() == 2))\' > ./data/dates-wednesdays.txt'
+    ret = subprocess.run(cmd, capture_output=True, text=True, shell=True, env=os.environ.copy())
+    print(f"Executing: {cmd}")
+    print(f"Execution output: {ret.stdout}")
+    print(f"Execution error: {ret.stderr}")
+    return {"status": "success", "result": ret.stdout}
 
 async def execute_task(task: str):
     print("Function called")
@@ -86,7 +94,7 @@ async def execute_task(task: str):
         print(f"Executing: {cmd}")
         print(f"Execution output: {ret.stdout}")
         print(f"Execution error: {ret.stderr}")
-        return response.json()["choices"][0]["message"]["content"]
+        return cmd
     else:
         raise HTTPException(status_code=500, detail=f"Error communicating with AIProxy API: {response.text}")
 
