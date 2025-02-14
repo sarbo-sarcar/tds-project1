@@ -82,7 +82,7 @@ async def execute_task(task: str):
     if response.status_code == 200:
         print(response.json())
         cmd = response.json()["choices"][0]["message"]["content"]
-        ret = subprocess.run(cmd, capture_output=True, text=True, shell=True )
+        ret = subprocess.run(cmd, capture_output=True, text=True, shell=True, env=os.environ.copy())
         print(f"Executing: {cmd}")
         print(f"Execution output: {ret.stdout}")
         print(f"Execution error: {ret.stderr}")
