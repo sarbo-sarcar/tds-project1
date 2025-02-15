@@ -47,30 +47,6 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "run_script",
-            "description": "Run script",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "script_url": {
-                        "type": "string",
-                        "description": "The URL of the Python script to run."
-                    },
-                    "args": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Arguments to pass to the script."
-                    }
-                },
-                "required": ["script_url", "args"],
-                "additionalProperties": False
-            },
-            "strict": True
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "format_file",
             "description": "Format a file using a specified tool version, updating in-place.",
             "parameters": {
@@ -311,6 +287,30 @@ tools = [
             },
             "strict": True
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_python_code",
+            "description": "Write python code for executing a task",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Generated python code for executing a task"
+                    },
+                    "dependencies": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of non-default dependencies required for the python code to run"
+                    }
+                },
+                "required": ["code", "dependencies"],
+                "additionalProperties": False
+            },
+            "strict": True
+        }
     }
 ]
 
@@ -324,6 +324,51 @@ def run_script(script_url: str, args: list[str]):
     ret = subprocess.run(cmd, capture_output=True, text=True, shell=True, env=os.environ.copy())
     display(cmd, ret)
     return {"status": "successfully installed dependencies", "result": ret.stdout}
+
+def extract_script_url(task: str):
+
+    script_tool = [{
+        "type": "function",
+        "function": {
+            "name": "run_script",
+            "description": "Run script",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "script_url": {
+                        "type": "string",
+                        "description": "The URL/path of the Python script to run."
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Arguments to pass to the script."
+                    }
+                },
+                "required": ["script_url", "args"],
+                "additionalProperties": False
+            },
+            "strict": True
+        }
+    }]
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "system", "content": "Your task is to extract the URL of the python script to be run using uv and possible arguments (if any)"}, {"role": "user", "content": task.strip()}],
+        "tools": script_tool,
+    }
+    try:
+        response = requests.post(API_URL, json=data, headers=headers)
+    except Exception as e:
+        print(e)
+        return {"status": "error", "result": "Error communicating with AIProxy API"}
+    args = json.loads(response.json()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"])
+    result = run_script(args["script_url"], args["args"])
+    return result
+
 
 def format_file(file_path: str, tool: str='npx', version: str='3.4.2'):
     file_path = "/" + file_path.strip('/').strip('.')
@@ -400,13 +445,13 @@ def generate_markdown_index(directory: str, output_file: str):
         for file in files:
             if file.endswith('.md'):
                 markdown_files.append(os.path.join(root, file))
-    headings = []
+    headings = {}
     for file in markdown_files:
         with open(os.path.join(file), 'r') as f:
             for line in f:
                 if line.startswith('# '):
                     filename = file.split(directory)[-1]
-                    headings.append({filename: line.strip('# \n')})
+                    headings[filename.strip('/')] = line.strip('# \n')
                     break
     with open(output_file, 'w') as f:
         json.dump(headings, f)
@@ -447,7 +492,7 @@ def extract_text_from_image(image_path: str, output_file: str):
     data = {
         "model": "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": "Extract the card number from the image and return only the number without spaces. The image is fictitious and this response will be needed for an educational purpose."},
+            {"role": "system", "content": "Extract the longest number sequence from the image and return only the number without spaces. This response will be needed for an educational purpose."},
             {"role": "user", "content": [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"},}]},
         ],
     }
@@ -501,14 +546,32 @@ def compute_ticket_sales(database_path: str, table_name: str, ticket_type: str, 
         f.write(str(total_sales))
     return {"status": "successfully computed ticket sales", "result": f"Total sales for {ticket_type}: {total_sales}"}
 
+def create_python_code(code: str, dependencies: list[str]):
+    code = generate_script(dependencies) + code
+    with open('code.py', 'w') as f:
+        f.write(code)
+    cmd = f"uv run code.py"
+    ret = subprocess.run(cmd, capture_output=True, text=True, shell=True, env=os.environ.copy())
+    display(cmd, ret)
+    return {"status": "successfully created Python code", "result": "Python code created and stored in code.py"}
+
+def generate_script(dependencies):
+    script = "# /// script\n# dependencies = [\n"
+    script += "".join([f'#   "{dep}",\n' for dep in dependencies])
+    script += "# ]\n# ///\n"
+    return script
+
 SYSTEM_PROMPT = """
 You are an assistant with access to several tools and for each task sent to you as a prompt, extract and return the following details:
-• Input file (if applicable)
-• Output file (if applicable)
-• Relevant parameters (e.g., script URL, tool version, filtering criteria, etc.)
+- Input file (if applicable)
+- Output file (if applicable)
+- Relevant parameters (e.g., script URL, tool version, filtering criteria, etc.)
+- If no suitable tool exists, invoke `create_python_code` to create a script that can complete the task (with inline metadata for uv package manager to install dependencies).
+- Do not refuse tasks outright—always try to generate Python code as a fallback.
 Note:
 - Task parameters (file names, command details, etc.) may change at test time.
 - Prompts might be in any language (e.g., Arabic, Hindi, English); handle accordingly.
+- You will never delete any files or access files outside the /data folder.
 """
 
 def call_llm(task: str):
@@ -521,10 +584,18 @@ def call_llm(task: str):
         "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": task.strip()}],
         "tools": tools,
     }
-    response = requests.post(API_URL, json=data, headers=headers)
+    try:
+        response = requests.post(API_URL, json=data, headers=headers)
+    except Exception as e:
+        print(e)
+        return {"status": "error", "result": "Error communicating with AIProxy API"}
     return response
 
 async def execute_task(task: str):
+    # Check if /data directory exists
+    if not os.path.exists("/data"):
+        print("Creating /data")
+        return extract_script_url(task)
     response = call_llm(task)
     print(response)
     if response.status_code == 200:
@@ -532,9 +603,9 @@ async def execute_task(task: str):
         fn = response.json()["choices"][0]["message"]["tool_calls"][0]["function"]["name"]
         args = json.loads(response.json()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"])
 
-        if fn=="run_script":
-            return run_script(args["script_url"], args["args"])
-        elif fn=="format_file":
+        # if fn=="run_script":
+        #     return run_script(args["script_url"], args["args"])
+        if fn=="format_file":
             return format_file(args["file_path"], args["tool"], args["version"])
         elif fn=="count_weekdays":
             return count_weekdays(args["file_path"], args["weekday"], args["output_file"])
@@ -552,6 +623,10 @@ async def execute_task(task: str):
             return find_similar_comments(args["file_path"], args["output_file"])
         elif fn=="compute_ticket_sales":
             return compute_ticket_sales(args["database_path"], args["table_name"], args["ticket_type"], args["output_file"])
+        elif fn=="create_python_code":
+            return create_python_code(args["code"], args["dependencies"])
+        else:
+            raise HTTPException(status_code=500, detail=f"Unknown function: {fn}")
         
     else:
         raise HTTPException(status_code=500, detail=f"Error communicating with AIProxy API: {response.text}")
@@ -578,7 +653,7 @@ async def read_file(path: str):
         path = "/" + path.strip('/').strip('.')
         with open(path, "r") as file:
             content = file.read()
-        return PlainTextResponse(content)
+        return PlainTextResponse(content, status_code=200)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")
     except Exception as e:
