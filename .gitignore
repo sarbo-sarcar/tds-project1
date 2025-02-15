@@ -1,0 +1,6 @@
+__pycache__/
+data/
+datagen.py
+evaluate.py
+temp.py
+app.py
